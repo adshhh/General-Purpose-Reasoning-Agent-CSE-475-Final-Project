@@ -29,20 +29,30 @@ from utils import call_llm
 # Helpers
 # ---------------------------------------------------------------------------
 
-# Matches any parenthesized lowercase action like "(feast b d)" or
-# "(drive truck2 depot2 depot0)". Keeps only these lines from LLM output.
-_ACTION_RE = re.compile(r"\(\s*[a-z][a-z0-9_\- ]*\)")
+# Matches parenthesized actions in any case, e.g. "(feast b d)", "(Attack A)"
+# "(drive truck2 depot2 depot0)".
+_ACTION_RE = re.compile(r"\(\s*[a-zA-Z][a-zA-Z0-9_\- ]*\)")
 
 
 def _extract_plan(text: str) -> str:
-    """Keep only action-shaped parenthesized tokens, one per line."""
+    """
+    Extract action lines from raw LLM output.
+    Strategy:
+      1. Pull all parenthesized tokens -- lowercased so output is consistent.
+      2. If nothing found, return the raw text stripped of markdown fences
+         (the model may have answered without parens, e.g. 'attack a').
+    """
     if not text:
         return ""
     actions: List[str] = []
     for match in _ACTION_RE.findall(text):
-        action = re.sub(r"\s+", " ", match.strip())
+        action = re.sub(r"\s+", " ", match.strip()).lower()
         actions.append(action)
-    return "\n".join(actions)
+    if actions:
+        return "\n".join(actions)
+    # Fallback: strip markdown fences and return raw text
+    cleaned = re.sub(r"```[a-z]*", "", text).strip()
+    return cleaned
 
 
 def _score_plan(problem: str, plan: str) -> float:
@@ -160,15 +170,24 @@ def tree_of_thoughts(problem: str, n_candidates: int = 3) -> str:
 # Main entry point (called by router.py)
 # ---------------------------------------------------------------------------
 
-def solve(question: str, strategy: str = "least_to_most") -> str:
+def solve(question: str, strategy: str = "least_to_most", debug: bool = False) -> str:
     """
     Route to one of the three techniques.
-
-    strategy:
-      - "plan_and_solve" : 2 calls, cheapest
-      - "least_to_most"  : 2 calls, DEFAULT (best quality/cost ratio)
-      - "tree_of_thoughts": 6 calls, strongest
+    strategy: "plan_and_solve" | "least_to_most" (default) | "tree_of_thoughts"
+    debug: print raw API response to diagnose empty results
     """
+    if debug:
+        raw = call_llm(
+            question,
+            system="You are a planner. Output ONLY action lines in parenthesis syntax e.g. (attack a), one per line.",
+            temperature=0.0,
+            max_tokens=800,
+        )
+        print("[DEBUG] Raw API response:")
+        print(raw)
+        print("[DEBUG] Extracted:")
+        print(_extract_plan(raw))
+        return _extract_plan(raw)
     if strategy == "plan_and_solve":
         return plan_and_solve(question)
     if strategy == "tree_of_thoughts":
