@@ -59,8 +59,8 @@ def self_check(problem: str, code: str) -> str:
 def solve(question: str) -> str:
     code = generate_code(question)
     
-    first_check = self_check(question, code)
-    if first_check != code:
-        return self_check(question, first_check)
-    #return code
-    return first_check
+    #first_check = self_check(question, code)
+    #if first_check != code:
+   #    return self_check(question, first_check)
+    return code
+    #return first_check
