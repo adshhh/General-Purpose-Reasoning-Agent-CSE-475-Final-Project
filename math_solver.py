@@ -5,7 +5,7 @@ from typing import List
 from collections import Counter
 import random
 
-COT_SYSTEM_PROMPT = """You are an expert at solving math problems, including difficult college-level questions.
+COT_PLAN_SYSTEM_PROMPT = """You are an expert at solving math problems, including difficult college-level questions.
 
 Your job is not to write Python code and not to give the final numeric answer.
 Your job is to understand the problem and produce a clear mathematical plan in normal text that can later be translated into Python.
@@ -32,6 +32,18 @@ Mathematical Plan:
 4. State what quantity should be computed at the end.
 
 Keep the plan concise, clear, and directly usable for generating Python code.
+The answer is always a non-negative integer between 0 and 999.
+"""
+
+COT_ANSWER_PROMPT = """You are an expert at solving difficult math problems.
+The answer is always a non-negative integer between 0 and 999.
+When solving a problem, think step-by-step and keep your reasoning concise.
+Your output must follow exactly this format:
+Reasoning:
+Step 1: ...
+Step 2: ...
+...
+Final Answer: <integer>
 """
 
 PAL_SYSTEM_PROMPT = """You are an expert Python programmer solving math word problems.
@@ -51,7 +63,7 @@ Rules:
 - You may use standard Python libraries and sympy when symbolic solving is needed.
 - Store the final answer in a variable named result.
 - Always assign result as a plain Python number. If using sympy, wrap the final value with float() or int().
-
+- The final result must always be a plain Python integer (not float, not sympy expression). Use int() if needed.
 
 Q: There were nine footballs in the sports room. Five more footballs were added each day, from Monday to Thursday. How many footballs are now in the sports room?
 
@@ -151,10 +163,15 @@ def majority_vote(answers: List[str]) -> str:
 
     return winner
 
-def cot_solve(problem: str, temperature: float = 0.0) -> str:
-    result = call_llm(problem, system=COT_SYSTEM_PROMPT, temperature=temperature, max_tokens=2000)
+def cot_pal_solve(problem: str, temperature: float = 0.0) -> str:
+    result = call_llm(problem, system=COT_PLAN_SYSTEM_PROMPT, temperature=temperature, max_tokens=2000)
 
     return result
+
+def cot_answer_solve(problem: str, temperature: float = 0.0) -> str:
+    result = call_llm(problem, system=COT_ANSWER_PROMPT, temperature=temperature, max_tokens=2000)
+    
+    return extract_answer(result)
 
 def pal_from_cot(question: str, cot_reasoning: str, temperature: float = 0.0) -> str:
     prompt = (
@@ -165,28 +182,9 @@ def pal_from_cot(question: str, cot_reasoning: str, temperature: float = 0.0) ->
     result = call_llm(prompt, system=PAL_SYSTEM_PROMPT, temperature=temperature, max_tokens=1000)
     result = re.sub(r"```\w*\n?", "", result)
     result = re.sub(r"\n?```", "", result)
-    return result.strip()
-
-
-def self_consistency(problem: str, n: int = 3) -> str:
-    answers = []
-    for i in range(n): 
-        temp = 0.0 if i == 0 else random.uniform(0.0, 0.5)
-        result = run_code(pal_solve(problem, temperature=temp))
-        if result is not None:
-            answers.append(str(result))
-    return majority_vote(answers)
-
-
-def pal_solve(question: str,  temperature: float = 0.0) -> str:
-    prompt = f"Q: {question}\n\n# solution in Python:"
-    result = call_llm(prompt, system=PAL_SYSTEM_PROMPT, temperature=temperature, max_tokens=1000)
-    result = re.sub(r"```\w*\n?", "", result)
-    result = re.sub(r"\n?```", "", result)
     result = re.sub(r'(\d+)!', r'math.factorial(\1)', result)
 
     return result.strip()
-
 
 def run_code(code: str):
     namespace = {"__builtins__": __builtins__}
@@ -198,25 +196,19 @@ def run_code(code: str):
         print(f"[run_code failed] {e}\nCode: {code[:200]}")
         return None
 
-
-
 def solve(question: str) -> str:
-    cot_output = cot_solve(question)
-    pal_code = pal_from_cot(question, cot_output)
+    plan = cot_pal_solve(question)
+    pal_code = pal_from_cot(question, plan)
     result = run_code(pal_code)
-
     if result is not None:
-        return str(result)
+        try:
+            return str(int(result))
+        except (TypeError, ValueError):
+            return str(result)
+
+    answers = []
+    for i in range(3):
+        temp = 0.0 if i == 0 else random.uniform(0.3, 0.7)
+        answers.append(cot_answer_solve(question, temperature=temp))
     
-    fallback = call_llm(
-        f"PROBLEM:\n{question}\n\nPLAN:\n{cot_output}\n\nGive only the final numeric answer.",
-        temperature=0.0, max_tokens=100
-    )
-    return fallback.strip()
-
- 
-
-
-    
-
-    
+    return majority_vote(answers)
