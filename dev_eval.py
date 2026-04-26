@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Owner: Person B (Soul) - dev-set evaluation harness for cs + fp solvers
+# Angel - dev-set evaluation harness for cs + fp solvers
 """Run Person B's solvers on the labeled dev set; report per-domain accuracy + call usage."""
 
 from __future__ import annotations
@@ -16,10 +16,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 
-# ---------------------------------------------------------------------------
 # .env loader (runs before utils import)
-# ---------------------------------------------------------------------------
-
 def _load_dotenv() -> None:
     env_path = Path(__file__).resolve().parent / ".env"
     if not env_path.exists():
@@ -37,8 +34,7 @@ def _load_dotenv() -> None:
 
 _load_dotenv()
 
-# Side-effect: log every LLM call to call_log.jsonl.
-import call_logger  # noqa: F401
+import call_logger  
 
 import ast
 import re
@@ -55,8 +51,8 @@ from utils import get_per_question_calls, reset_per_question_counter
 _PROJECT_ROOT = Path(__file__).resolve().parent
 _DEV_NAME = "cse476_final_project_dev_data.json"
 _DEV_CANDIDATES = [
-    _PROJECT_ROOT / "data" / _DEV_NAME,                                # preferred
-    _PROJECT_ROOT / "final_project_tutorial_and_dev_data" / _DEV_NAME, # nested (Soul's layout)
+    _PROJECT_ROOT / "data" / _DEV_NAME,                                
+    _PROJECT_ROOT / "final_project_tutorial_and_dev_data" / _DEV_NAME, 
     _PROJECT_ROOT.parent / "final_project_tutorial_and_dev_data" / _DEV_NAME,
 ]
 
@@ -65,8 +61,6 @@ def _resolve_dev_path() -> Path:
     for p in _DEV_CANDIDATES:
         if p.exists():
             return p
-    # Fall back to the first candidate so the error message points users
-    # at the canonical place to put the file.
     return _DEV_CANDIDATES[0]
 
 
@@ -74,12 +68,7 @@ DEV_PATH = _resolve_dev_path()
 RESULTS_OUT = _PROJECT_ROOT / "dev_eval_results.json"
 
 
-# ---------------------------------------------------------------------------
 # Domain-aware exact-match grader for future_prediction
-# ---------------------------------------------------------------------------
-
-# Inner of the LAST \boxed{...} -- this is what the prompt tells the model
-# to wrap its answer in, so it's the part we should compare.
 _BOXED_INNER = re.compile(r"\\boxed\{((?:[^{}]|\{[^{}]*\})*)\}")
 _NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
@@ -154,9 +143,7 @@ def _grade_fp_exact(expected: str, got: str) -> bool:
     return False
 
 
-# ---------------------------------------------------------------------------
-# Lenient common_sense grader (eval-only; does NOT change agent output)
-# ---------------------------------------------------------------------------
+# Lenient common_sense grader (eval-only; does not change agent output)
 
 # Honorific titles to strip when comparing person names.
 _TITLES_RE = re.compile(
@@ -199,15 +186,12 @@ _TRAILING_MEASURE_WORDS_RE = re.compile(
 )
 
 # Generic place-name prefixes that indicate the same place
-# (eval-only -- "New Delhi" should match "Delhi", "Greater London" should
-# match "London", etc.). One-way: prefix word can be removed but we don't
-# add words.
 _PLACE_PREFIX_RE = re.compile(
     r"^(new|greater|north|south|east|west|upper|lower|saint|st\.?|el|la|le|los|las)\s+",
     re.IGNORECASE,
 )
 
-# Generic suffixes on places ("London City", "Manhattan Borough", etc.)
+# Generic suffixes on places
 _PLACE_SUFFIX_RE = re.compile(
     r"\s+(city|borough|county|harbour|harbor|district|region|province|"
     r"state|country|island|peninsula|territory|metropolitan area)$",
@@ -221,26 +205,15 @@ def _lenient_normalise(s: str) -> str:
     if not s:
         return ""
     out = s.strip().lower()
-    # Strip honorific titles (eg "President Richard Nixon" -> "Richard Nixon").
     out = _TITLES_RE.sub("", out)
-    # Normalize units (kilometers -> km, etc.).
     for pat, rep in _UNIT_NORMALIZATIONS:
         out = re.sub(pat, rep, out, flags=re.IGNORECASE)
-    # Strip trailing measurement-context words ("long", "wide", "old").
     out = _TRAILING_MEASURE_WORDS_RE.sub("", out)
-    # Drop leading articles.
     out = re.sub(r"^(the|a|an)\s+", "", out)
-    # Drop apostrophes entirely so "sophie's" matches "sophies".
     out = out.replace("'", "").replace("’", "")
-    # Strip in-number commas BEFORE general punctuation removal so "1,234"
-    # collapses to "1234" rather than "1 234".
     out = re.sub(r"(?<=\d),(?=\d)", "", out)
-    # Strip punctuation that doesn't carry meaning.
     out = re.sub(r"[^\w\s\-]", " ", out)
-    # Collapse whitespace.
     out = re.sub(r"\s+", " ", out).strip()
-    # Re-collapse a stray possessive "s" left over from inputs like
-    # "sophie s choice" (where the dataset already pre-stripped the apostrophe).
     out = re.sub(r"\b(\w+)\s+s\b", r"\1s", out)
     return out
 
@@ -251,15 +224,12 @@ def _place_variants(s: str) -> List[str]:
         return []
     base = _lenient_normalise(s)
     variants = {base}
-    # Strip one place-prefix ("new delhi" -> "delhi").
     stripped_prefix = _PLACE_PREFIX_RE.sub("", base, count=1)
     if stripped_prefix and stripped_prefix != base:
         variants.add(stripped_prefix.strip())
-    # Strip one place-suffix ("london city" -> "london").
     stripped_suffix = _PLACE_SUFFIX_RE.sub("", base, count=1)
     if stripped_suffix and stripped_suffix != base:
         variants.add(stripped_suffix.strip())
-    # Both directions ("greater london city" -> "london").
     both = _PLACE_SUFFIX_RE.sub("", _PLACE_PREFIX_RE.sub("", base, count=1), count=1)
     if both and both != base:
         variants.add(both.strip())
@@ -288,32 +258,26 @@ def _grade_cs_lenient(expected: str, got: str) -> bool:
     if not e_norm or not g_norm:
         return False
 
-    # 1. Direct equality after normalization.
+    # Direct equality after normalization.
     if e_norm == g_norm:
         return True
 
-    # 2. Substring containment (in either direction). Conservative: only
-    # accept if the shorter side is at least 3 chars (avoids accepting "a"
-    # as a substring of any answer).
+    # Substring containment (in either direction).
     if len(e_norm) >= 3 and e_norm in g_norm:
         return True
     if len(g_norm) >= 3 and g_norm in e_norm:
         return True
 
-    # 3. Place-variant cross-match.
+    # Place-variant cross-match.
     e_vars = set(_place_variants(expected))
     g_vars = set(_place_variants(got))
     if e_vars & g_vars:
         return True
 
-    # 4. Token-set: do all expected tokens appear in got?
-    # Only when expected has >= 2 tokens (single-token answers should already
-    # match via #1 or #2; using #4 on a single token risks false positives).
     e_tokens = set(e_norm.split())
     g_tokens = set(g_norm.split())
     if len(e_tokens) >= 2 and e_tokens.issubset(g_tokens):
         return True
-    # And the reverse (got tokens are a subset of expected).
     if len(g_tokens) >= 2 and g_tokens.issubset(e_tokens):
         return True
 
@@ -337,10 +301,7 @@ def _grade(domain: str, question: str, expected: str, got: str, use_judge: bool)
     return grade_exact(expected, got)
 
 
-# ---------------------------------------------------------------------------
 # Dev-data loading + filtering
-# ---------------------------------------------------------------------------
-
 def _load_dev() -> List[Dict]:
     if not DEV_PATH.exists():
         print(f"ERROR: dev data not found.")
@@ -372,10 +333,7 @@ def _select(records: List[Dict], domain: str, n: int) -> List[Tuple[int, Dict]]:
     return out
 
 
-# ---------------------------------------------------------------------------
 # Atomic checkpoint write + summary builder (so we can save mid-run)
-# ---------------------------------------------------------------------------
-
 def _save_atomic(payload: Dict, path: Path) -> None:
     """Write JSON to path atomically: write .tmp, fsync, replace."""
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -428,10 +386,7 @@ def _load_existing(path: Path) -> List[Dict]:
     return []
 
 
-# ---------------------------------------------------------------------------
 # Run one batch
-# ---------------------------------------------------------------------------
-
 _print_lock = threading.Lock()
 
 
@@ -451,10 +406,6 @@ def _process_one_question(
     """
     question = rec.get("input", "")
     expected = str(rec.get("output", ""))
-
-    # Install a fresh per-question counter cell IN THIS THREAD'S CONTEXT.
-    # Sub-pools spawned by parallel.call_llm_concurrent will copy this
-    # context and increment the SAME cell.
     reset_per_question_counter()
 
     t0 = time.time()
@@ -472,8 +423,6 @@ def _process_one_question(
     else:
         correct = _grade(domain, question, expected, answer, use_judge)
 
-    # Build the per-question report lines as one string so concurrent
-    # workers don't interleave their output mid-line.
     q_preview = (question or "").replace("\n", " ")
     if len(q_preview) > 90:
         q_preview = q_preview[:87] + "..."
@@ -538,7 +487,7 @@ def _run_one_domain(
     rows: List[Dict] = []
 
     if workers <= 1 or len(items) <= 1:
-        # Sequential path -- preserves prior behaviour exactly.
+        # Sequential path
         for i, (idx, rec) in enumerate(items, 1):
             row = _process_one_question(i, len(items), domain, solver_fn, idx, rec, use_judge)
             rows.append(row)
@@ -546,10 +495,8 @@ def _run_one_domain(
                 on_row_done(row)
         return rows
 
-    # Parallel path. Each worker thread starts in a freshly-copied context,
-    # then immediately installs its own per-question counter cell. Sub-pools
-    # spawned inside the solver inherit that cell.
-    from parallel import submit_in_context  # local import to avoid cycles
+    # Parallel path. 
+    from parallel import submit_in_context  
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futs = {}
         for i, (idx, rec) in enumerate(items, 1):
@@ -566,17 +513,12 @@ def _run_one_domain(
             if on_row_done is not None:
                 on_row_done(row)
 
-    # Re-sort rows by their position in `items` so the saved JSON has a
-    # predictable order regardless of completion order.
     item_order = {idx: i for i, (idx, _) in enumerate(items)}
     rows.sort(key=lambda r: item_order.get(r["dev_index"], 1_000_000))
     return rows
 
 
-# ---------------------------------------------------------------------------
 # Reporting
-# ---------------------------------------------------------------------------
-
 def _report(rows: List[Dict], use_judge: bool) -> Dict:
     """Print human-readable report and return the same summary that's saved to disk."""
     summary = _build_summary(rows)
@@ -612,10 +554,7 @@ def _report(rows: List[Dict], use_judge: bool) -> Dict:
     return summary
 
 
-# ---------------------------------------------------------------------------
 # Entry point
-# ---------------------------------------------------------------------------
-
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--cs", type=int, default=50,
@@ -649,7 +588,6 @@ def main() -> int:
     else:
         print("  Grader: exact-then-LENIENT (cs) + boxed-list match (fp), no extra calls")
 
-    # ----- Resume support: load any prior results and skip those (domain, idx) pairs.
     all_rows: List[Dict] = []
     done_keys: set = set()
     if args.resume:
@@ -662,7 +600,6 @@ def main() -> int:
         else:
             print(f"  Resume: no prior results at {RESULTS_OUT.name}; starting fresh.")
     elif RESULTS_OUT.exists() and not args.no_save:
-        # Safety: warn before overwriting an existing result file without --resume.
         print(f"  WARNING: {RESULTS_OUT.name} exists and will be OVERWRITTEN. "
               f"Re-run with --resume to keep prior rows. Continuing in 3s...")
         time.sleep(3)
@@ -698,7 +635,6 @@ def main() -> int:
         pass
     print()
 
-    # ----- Per-row save closure: thread-safe append + atomic file write.
     checkpoint_lock = threading.Lock()
 
     def _on_row(row: Dict) -> None:
@@ -738,7 +674,7 @@ def main() -> int:
     wall_elapsed = time.time() - wall_t0
     summary = _report(all_rows, args.judge)
 
-    # Final save (no-op if checkpoint already wrote everything).
+    # Final save
     if not args.no_save and all_rows:
         _save_atomic({"summary": summary, "results": all_rows}, RESULTS_OUT)
         print(f"\nFull per-question results saved to {RESULTS_OUT.name} "

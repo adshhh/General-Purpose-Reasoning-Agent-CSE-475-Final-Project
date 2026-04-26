@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Owner: Person B (Soul) - smoke test for cs + fp solvers
+# Angel - smoke test for cs + fp solvers
 """Smoke test the two solvers on a few sample questions; --extract-only skips API."""
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-# Owner: Person C (Ismail) - shared API wrapper. Concurrency cells added by Person B (Soul).
+# Ismail - shared API wrapper. Concurrency cells added by Person B (Soul).
 """
 Shared LLM API wrapper for CSE 476 Final Project.
 

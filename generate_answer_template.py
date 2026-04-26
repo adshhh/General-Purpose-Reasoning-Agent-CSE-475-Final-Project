@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# Owner: Person C (Ismail) - shared answer-file generator for the auto-grader
 """
 Generate the final answer file for the CSE 476 auto-grader.
 

@@ -1,4 +1,4 @@
-# Owner: Person A (adshhh / Aditya) - math domain solver (CoT + PAL + Self-Consistency fallback)
+# Aditya - math domain solver (CoT + PAL + Self-Consistency fallback)
 from __future__ import annotations
 from utils import call_llm
 import re

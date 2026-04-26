@@ -1,4 +1,4 @@
-# Owner: Person C (Ismail) - planning domain solver
+# Ismail - planning domain solver
 """
 Planning domain solver for CSE 476 Final Project.
 

@@ -1,4 +1,4 @@
-# Owner: Person B (Soul) - parallel-LLM helper
+# Angel - parallel-LLM helper
 """Parallel LLM helper: bounded semaphore + thread-local per-question counter cell."""
 
 from __future__ import annotations

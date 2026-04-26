@@ -1,4 +1,4 @@
-# Owner: Person C (Ismail) - domain router / dispatcher
+# Ismail - domain router / dispatcher
 """
 Domain router for CSE 476 Final Project.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Owner: Person B (Soul) - sample-N-by-domain harness from the unlabeled test set
+# Angel - sample-N-by-domain harness from the unlabeled test set
 """Run domain-filtered test items through the solvers and print a results table for review."""
 
 from __future__ import annotations

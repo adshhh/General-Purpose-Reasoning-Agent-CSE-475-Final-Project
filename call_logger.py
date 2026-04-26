@@ -1,4 +1,4 @@
-# Owner: Person B (Soul) - dev-only call logger (side-effect import wraps utils.call_llm)
+# Angel - dev-only call logger (side-effect import wraps utils.call_llm)
 """Side-effect import: wraps utils.call_llm to append each call to call_log.jsonl."""
 
 from __future__ import annotations
@@ -12,26 +12,20 @@ from threading import Lock
 
 import utils  # the team's shared API wrapper
 
-# ---------------------------------------------------------------------------
 # Config
-# ---------------------------------------------------------------------------
-
 LOG_PATH = Path(__file__).resolve().parent / "call_log.jsonl"
-PREVIEW_CHARS = 200          # how much of system/prompt/reply to keep
-SYSTEM_PREVIEW_CHARS = 120   # system prompts are short; keep tighter
+PREVIEW_CHARS = 200          
+SYSTEM_PREVIEW_CHARS = 120   
 
 # Override the log path with env var if needed (e.g. for parallel runs).
 if os.getenv("CALL_LOG_PATH"):
     LOG_PATH = Path(os.environ["CALL_LOG_PATH"])
 
-_write_lock = Lock()         # protects file appends from concurrent threads
+_write_lock = Lock()         
 _PATCHED_FLAG = "_call_logger_patched"
 
 
-# ---------------------------------------------------------------------------
 # Wrapper
-# ---------------------------------------------------------------------------
-
 def _truncate(s: str, n: int) -> str:
     if not s:
         return ""
@@ -42,7 +36,6 @@ def _truncate(s: str, n: int) -> str:
 def _append(record: dict) -> None:
     line = json.dumps(record, ensure_ascii=False)
     with _write_lock:
-        # Open per-write so a crash mid-run still leaves valid JSONL.
         with LOG_PATH.open("a", encoding="utf-8") as fp:
             fp.write(line + "\n")
 
@@ -114,7 +107,7 @@ def _make_wrapper(orig_call_llm):
     # Preserve the original docstring/name for debugging.
     wrapped.__name__ = getattr(orig_call_llm, "__name__", "call_llm")
     wrapped.__doc__ = getattr(orig_call_llm, "__doc__", None)
-    wrapped.__wrapped__ = orig_call_llm  # introspectable
+    wrapped.__wrapped__ = orig_call_llm 
     return wrapped
 
 
@@ -125,10 +118,6 @@ def _patch_once() -> None:
     utils.call_llm = _make_wrapper(utils.call_llm)
     setattr(utils, _PATCHED_FLAG, True)
 
-    # Make sure modules that already imported `from utils import call_llm`
-    # (router.py, planning.py, common_sense.py, future_prediction.py) also
-    # see the wrapped version. We rebind the name in each module that has
-    # already imported it.
     import sys
     for mod in list(sys.modules.values()):
         if mod is None or not hasattr(mod, "call_llm"):
@@ -136,8 +125,5 @@ def _patch_once() -> None:
         if getattr(mod, "call_llm", None) is wrapped_target_orig:
             mod.call_llm = utils.call_llm
 
-
-# Capture the *original* before wrapping, so we can find any module that
-# already imported it and rebind to the wrapped version.
 wrapped_target_orig = utils.call_llm
 _patch_once()

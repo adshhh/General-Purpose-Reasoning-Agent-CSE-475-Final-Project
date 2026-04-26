@@ -1,4 +1,4 @@
-# Owner: Person B (Soul) - common-sense domain solver
+# Angel - common-sense domain solver
 """Common-sense solver: step-back -> recite -> adaptive self-consistency -> USC tie-break."""
 
 from __future__ import annotations

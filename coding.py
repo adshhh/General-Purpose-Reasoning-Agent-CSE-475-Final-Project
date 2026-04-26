@@ -1,4 +1,4 @@
-# Owner: Person A (adshhh / Aditya) - coding domain solver (plan-then-code)
+#Aditya - coding domain solver (plan-then-code)
 from __future__ import annotations
 from utils import call_llm
 import re

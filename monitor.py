@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Owner: Person B (Soul) - dev-only call-log viewer
+# Angel- dev-only call-log viewer
 """Read or live-tail call_log.jsonl. --summary / --tail N / --clear."""
 
 from __future__ import annotations

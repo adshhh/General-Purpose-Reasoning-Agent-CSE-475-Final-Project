@@ -1,4 +1,4 @@
-# Owner: Person C (Ismail) - shared evaluation harness
+# Ismail - shared evaluation harness
 """
 Evaluation harness for CSE 476 Final Project.
 

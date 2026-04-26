@@ -1,4 +1,4 @@
-# Owner: Person B (Soul) - future-prediction domain solver
+# Angel - future-prediction domain solver
 """Future-prediction solver: plan-and-solve + self-refine + 4-draft ensemble vote."""
 
 from __future__ import annotations
