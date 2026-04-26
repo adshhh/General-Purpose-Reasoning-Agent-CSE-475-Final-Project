@@ -1,0 +1,28 @@
+# Virtual environment
+venv/
+.venv/
+
+# API keys and secrets
+.env
+
+# LLM call log written by call_logger.py
+call_log.jsonl
+
+# Batch test results (Person B)
+batch_results.json
+dev_eval_results.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
