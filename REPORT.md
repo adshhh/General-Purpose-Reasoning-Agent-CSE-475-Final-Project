@@ -37,23 +37,23 @@ and planning questions on the dev set (no LLM call needed), and 65.7% of math
 and 55.5% of common-sense. The remaining questions fall through to the 1-call
 LLM classifier, keeping the total classification cost low.
 
-## The Nine Inference-Time Techniques
+## The Inference-Time Techniques
 
-| #  | Technique                     | File : function                        | Calls |
-|----|-------------------------------|----------------------------------------|-------|
-| 1  | Keyword + LLM Router          | `router.py : classify_domain`          | 0-1   |
-| 2  | Chain-of-Thought              | `math_solver.py : cot_solve`           | 1     |
-| 3  | Self-Consistency (majority)   | `math_solver.py : self_consistency`    | 5     |
-| 4  | Code Self-Check               | `coding.py : self_check`               | 2     |
-| 5  | ReAct (reason + act)          | `common_sense.py : react_solve`        | 3     |
-| 6  | Self-Refine                   | `common_sense.py : self_refine`        | 2     |
-| 7  | Majority-Vote Ensemble        | `future_prediction.py : vote`          | 3     |
-| 8  | Plan-and-Solve                | `planning.py : plan_and_solve`         | 2     |
-| 9  | Least-to-Most Decomposition   | `planning.py : least_to_most`          | 2     |
-| 10 | Tree of Thoughts              | `planning.py : tree_of_thoughts`       | 6     |
+| #  | Technique                     | File : function                              | Calls |
+|----|-------------------------------|----------------------------------------------|-------|
+| 1  | Keyword + LLM Router          | `router.py : classify_domain`                | 0-1   |
+| 2  | Chain-of-Thought Planning     | `math_solver.py : cot_pal_solve`             | 1     |
+| 3  | PAL (Program-Aided Language)  | `math_solver.py : pal_from_cot`              | 1     |
+| 4  | Self-Consistency (majority)   | `math_solver.py : cot_answer_solve`          | 3     |
+| 5  | Plan-then-Code                | `coding.py : reason_for_code`                | 2     |
+| 6  | ReAct (reason + act)          | `common_sense.py : react_solve`              | 3     |
+| 7  | Self-Refine                   | `common_sense.py : self_refine`              | 2     |
+| 8  | Majority-Vote Ensemble        | `future_prediction.py : vote`                | 3     |
+| 9  | Plan-and-Solve                | `planning.py : plan_and_solve`               | 2     |
+| 10 | Least-to-Most Decomposition   | `planning.py : least_to_most`                | 2     |
+| 11 | Tree of Thoughts              | `planning.py : tree_of_thoughts`             | 6     |
 
-Techniques 1, 8, 9, 10 are implemented. Techniques 2-7 are assigned to
-teammates (see Team Split below).
+Techniques 1-5 implemented by adshhh. Techniques 6-8 by Soul. Techniques 9-11 by Ismail.
 
 ## Design Choices
 
@@ -78,9 +78,9 @@ uses substring containment plus a judge fallback.
 
 ## Team Split
 
-- **adshhh (Person A):** Router/dispatcher shared infrastructure, `math_solver.py` (CoT + Self-Consistency), `coding.py` (self-check).
+- **adshhh (Person A):** `math_solver.py` (CoT planning + PAL + Self-Consistency fallback), `coding.py` (Plan-then-code), project report.
 - **Soul (Person B):** `common_sense.py` (ReAct + Self-Refine), `future_prediction.py` (majority-vote ensemble).
-- **Ismail (Person C):** `planning.py` (Plan-and-Solve, Least-to-Most, Tree of Thoughts), `evaluator.py`, `utils.py` API wrapper, project report.
+- **Ismail (Person C):** Router/dispatcher shared infrastructure, `planning.py` (Plan-and-Solve, Least-to-Most, Tree of Thoughts), `evaluator.py`, `utils.py` API wrapper, project report.
 
 ## Results on the Dev Set (1,000 examples)
 
@@ -99,7 +99,7 @@ Run `python evaluator.py` to produce numbers. Placeholder table:
 
 ```bash
 # 1. Install deps
-pip install requests
+pip install requests sympy
 
 # 2. Connect to ASU VPN (sslvpn.asu.edu) and set API key
 export OPENAI_API_KEY="<your_key_from_voyager>"
