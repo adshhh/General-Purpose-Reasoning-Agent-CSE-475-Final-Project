@@ -28,23 +28,23 @@ answer string  (<= 4900 chars)
 
 ## Techniques per domain
 
-| Domain              | Owner      | File                  | Techniques                                                  |
-|---------------------|------------|-----------------------|-------------------------------------------------------------|
-| math                | Person A   | `math_solver.py`      | CoT planning + PAL (Program-Aided Language) + Self-Consistency fallback |
-| coding              | Person A   | `coding.py`           | Plan-then-code (reasoning step + code-only emission)        |
-| common_sense        | Person B   | `common_sense.py`     | Step-Back + RECITE + Adaptive Self-Consistency + USC tie-break |
-| future_prediction   | Person B   | `future_prediction.py`| Plan-and-Solve + Self-Refine + 4-draft ensemble vote        |
-| planning            | Person C   | `planning.py`         | Plan-and-Solve / Least-to-Most / Tree of Thoughts (default: Least-to-Most) |
-| router              | Person C   | `router.py`           | Keyword classifier + 1-call LLM fallback                    |
+| Domain              | Owner      | File                  | Techniques                                                                 |
+|---------------------|------------|-----------------------|----------------------------------------------------------------------------|
+| math                | Aditya     | `math_solver.py`      | CoT planning + PAL (Program-Aided Language) + Self-Consistency fallback    |
+| coding              | Aditya     | `coding.py`           | Plan-then-code (reasoning step + code-only emission)                       |
+| common_sense        | Angel      | `common_sense.py`     | Step-Back + RECITE + Adaptive Self-Consistency + USC tie-break             |
+| future_prediction   | Angel      | `future_prediction.py`| Plan-and-Solve + Self-Refine + 4-draft ensemble vote                       |
+| planning            | Ismail     | `planning.py`         | Plan-and-Solve / Least-to-Most / Tree of Thoughts (default: Least-to-Most) |
+| router              | Ismail     | `router.py`           | Keyword classifier + 1-call LLM fallback                                   |
 
 ## Team split
 
-- **Person A — adshhh (Aditya):** `math_solver.py`, `coding.py`
-- **Person B — Soul:** `common_sense.py`, `future_prediction.py`, plus the
+- **adshhh (Aditya):** `math_solver.py`, `coding.py`
+- **Soul:** `common_sense.py`, `future_prediction.py`, plus the
   parallel/logging/eval infra (`parallel.py`, `call_logger.py`, `monitor.py`,
   `dev_eval.py`, `batch_test.py`, `test_person_b.py`)
-- **Person C — Ismail Wehelie:** `router.py`, `planning.py`, `utils.py`,
-  `agent.py`, `evaluator.py`, `generate_answer_template.py`
+- **Ismail Wehelie:** `router.py`, `planning.py`, `utils.py`,
+  `agent.py`, `evaluator.py`
 
 Every Python file carries an `# Owner: …` header at the top.
 
@@ -56,11 +56,11 @@ Every Python file carries an `# Owner: …` header at the top.
 |-- router.py                      # 5-domain classifier + dispatcher
 |-- utils.py                       # shared LLM wrapper + per-question budget
 |-- parallel.py                    # bounded-semaphore parallel call helpers
-|-- coding.py                      # Person A
-|-- math_solver.py                 # Person A
-|-- common_sense.py                # Person B
-|-- future_prediction.py           # Person B
-|-- planning.py                    # Person C
+|-- coding.py                      # Aditya - Plan-then-code (reasoning step + code-only emission) for coding domain
+|-- math_solver.py                 # Aditya - CoT planning + PAL (Program-Aided Language) + Self-Consistency fallback for math domain
+|-- common_sense.py                # Angel - Step-Back + RECITE + Adaptive Self-Consistency + USC tie-break for common_sense domain
+|-- future_prediction.py           # Angel - Plan-and-Solve + Self-Refine + 4-draft ensemble vote for future_prediction domain
+|-- planning.py                    # Ismail - Plan-and-Solve / Least-to-Most / Tree of Thoughts (default: Least-to-Most) for planning domain
 |-- evaluator.py                   # dev-set accuracy + LLM-as-judge
 |-- generate_answer_template.py    # produces data/cse_476_final_project_answers.json
 |-- call_logger.py                 # dev-only: side-effect-wraps utils.call_llm
