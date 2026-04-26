@@ -1,0 +1,7 @@
+﻿.env
+__MACOSX/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+dev_results.json
+.DS_Store
