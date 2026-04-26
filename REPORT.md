@@ -78,9 +78,9 @@ uses substring containment plus a judge fallback.
 
 ## Team Split
 
-- **adshhh (Person A):** `math_solver.py` (CoT planning + PAL + Self-Consistency fallback), `coding.py` (Plan-then-code), project report.
-- **Soul (Person B):** `common_sense.py` (ReAct + Self-Refine), `future_prediction.py` (majority-vote ensemble).
-- **Ismail (Person C):** Router/dispatcher shared infrastructure, `planning.py` (Plan-and-Solve, Least-to-Most, Tree of Thoughts), `evaluator.py`, `utils.py` API wrapper, project report.
+- **adshhh (Aditya):** `math_solver.py` (CoT planning + PAL + Self-Consistency fallback), `coding.py` (Plan-then-code), project report.
+- **Soul (Angel):** `common_sense.py` (ReAct + Self-Refine), `future_prediction.py` (majority-vote ensemble).
+- **Ismail (Ismail):** Router/dispatcher shared infrastructure, `planning.py` (Plan-and-Solve, Least-to-Most, Tree of Thoughts), `evaluator.py`, `utils.py` API wrapper, project report.
 
 ## Results on the Dev Set (1,000 examples)
 
