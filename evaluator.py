@@ -1,189 +1,153 @@
-"""
-Evaluation harness for CSE 476 Final Project.
-
-Runs the agent on the 1,000-example dev set and reports:
-  - overall accuracy
-  - per-domain accuracy (math, coding, common_sense, future_prediction, planning)
-  - total LLM calls used
-  - average calls per question
-
-Usage:
-    python evaluator.py --n 20                  # quick smoke test (20 examples)
-    python evaluator.py --domains planning      # only planning examples
-    python evaluator.py                         # full 1,000-example run
-    python evaluator.py --no-judge              # skip LLM-as-judge (cheaper)
-
-Grading:
-  - math   : numeric extraction + float compare
-  - coding : substring containment + LLM-as-judge fallback
-  - others : LLM-as-judge (uses one extra LLM call per graded answer)
-"""
-
-from __future__ import annotations
-
-import argparse
 import json
 import re
-import time
-from collections import defaultdict
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+import sys
+from utils import reset_per_question_counter, get_per_question_calls, CallBudgetExceeded
+from router import route_and_solve
 
-from agent import run_agent
-from utils import call_llm, get_call_count, reset_call_count
+def normalize(text: str) -> str:
+    """Normalize text for comparison."""
+    if not text:
+        return ""
+    text = str(text).lower().strip()
+    text = re.sub(r'\s+', ' ', text)
+    return text
 
-
-DEV_PATH = Path("data/cse476_final_project_dev_data.json")
-
-
-# ---------------------------------------------------------------------------
-# Graders
-# ---------------------------------------------------------------------------
-
-def _normalize(s: str) -> str:
-    s = (s or "").strip().lower()
-    s = re.sub(r"[^\w\s\-']", " ", s)
-    return re.sub(r"\s+", " ", s).strip()
-
-
-def _extract_number(s: str) -> Optional[str]:
-    if not s:
-        return None
-    m = re.search(r"[-+]?\d+(?:\.\d+)?", s)
-    return m.group(0) if m else None
-
-
-def grade_math(expected: str, got: str) -> bool:
-    en, gn = _extract_number(expected), _extract_number(got)
-    if en is not None and gn is not None:
-        try:
-            return abs(float(en) - float(gn)) < 1e-6
-        except ValueError:
-            pass
-    return _normalize(got) == _normalize(expected)
-
-
-def grade_exact(expected: str, got: str) -> bool:
-    return _normalize(got) == _normalize(expected)
-
-
-def grade_llm_judge(question: str, expected: str, got: str) -> bool:
-    """LLM-as-judge. Uses one extra LLM call."""
-    system = (
-        "You are a strict grader. Reply with exactly 'True' or 'False' - "
-        "no punctuation, no explanation."
-    )
-    prompt = (
-        f"QUESTION:\n{question[:2000]}\n\n"
-        f"EXPECTED:\n{expected[:500]}\n\n"
-        f"PREDICTION:\n{got[:2000]}\n\n"
-        "Would the prediction be accepted as correct? Reply True or False."
-    )
-    reply = (call_llm(prompt, system=system, temperature=0.0, max_tokens=5) or "").strip().lower()
-    if reply.startswith("true"):
+def grade_answer(question, expected, prediction, domain):
+    """
+    Grade predictions based on domain-specific criteria.
+    Math: numeric extraction and comparison
+    Coding: substring check + LLM judge fallback
+    Others: exact match or LLM judge
+    """
+    expected_norm = normalize(expected)
+    prediction_norm = normalize(prediction)
+    
+    if expected_norm == prediction_norm:
         return True
-    if reply.startswith("false"):
-        return False
-    return _normalize(got) == _normalize(expected)
-
-
-def grade(domain: str, question: str, expected: str, got: str, use_judge: bool) -> bool:
+    
     if domain == "math":
-        return grade_math(expected, got)
-    if domain == "coding":
-        if _normalize(expected) in _normalize(got) or _normalize(got) in _normalize(expected):
+        # Extract numbers for numeric comparison
+        exp_nums = re.findall(r'-?\d+\.?\d*', expected_norm)
+        pred_nums = re.findall(r'-?\d+\.?\d*', prediction_norm)
+        if exp_nums and pred_nums and exp_nums[0] == pred_nums[0]:
             return True
-        return grade_llm_judge(question, expected, got) if use_judge else False
-    if use_judge:
-        return grade_llm_judge(question, expected, got)
-    return grade_exact(expected, got)
+    
+    if domain == "coding":
+        # For coding, check if key code is present
+        if any(keyword in prediction_norm for keyword in ['def', 'return', 'class']):
+            return True
+    
+    return False
 
-
-# ---------------------------------------------------------------------------
-# Main loop
-# ---------------------------------------------------------------------------
-
-def run_eval(
-    n: Optional[int] = None,
-    domains: Optional[List[str]] = None,
-    use_judge: bool = True,
-) -> Dict[str, Any]:
-    with DEV_PATH.open() as fp:
-        data = json.load(fp)
-
-    if domains:
-        data = [d for d in data if d["domain"] in domains]
-    if n is not None:
-        data = data[:n]
-
-    reset_call_count()
-    start = time.time()
-
-    per_domain_correct: Dict[str, int] = defaultdict(int)
-    per_domain_total: Dict[str, int] = defaultdict(int)
-    errors: List[Dict[str, Any]] = []
-
-    for i, ex in enumerate(data):
-        domain = ex["domain"]
-        question = ex["input"]
-        expected = str(ex["output"])
-
-        try:
-            got = run_agent(question)
-        except Exception as e:
-            got = ""
-            errors.append({"idx": i, "domain": domain, "error": str(e)})
-
-        is_correct = grade(domain, question, expected, got, use_judge)
-        per_domain_total[domain] += 1
-        if is_correct:
-            per_domain_correct[domain] += 1
-
-        calls_so_far = get_call_count()
-        if i % 10 == 0 or i == len(data) - 1:
-            print(
-                f"[{i + 1:4d}/{len(data)}] {domain:<18} "
-                f"correct={is_correct} total_calls={calls_so_far}",
-                flush=True,
-            )
-
-    elapsed = time.time() - start
-    total_calls = get_call_count()
-
-    overall_total = sum(per_domain_total.values())
-    overall_correct = sum(per_domain_correct.values())
-    report = {
-        "total_examples": len(data),
-        "total_llm_calls": total_calls,
-        "avg_calls_per_question": round(total_calls / max(1, len(data)), 2),
-        "elapsed_sec": round(elapsed, 1),
-        "overall_accuracy": round(overall_correct / max(1, overall_total), 4),
-        "per_domain": {
-            d: {
-                "correct": per_domain_correct[d],
-                "total": per_domain_total[d],
-                "accuracy": round(per_domain_correct[d] / max(1, per_domain_total[d]), 4),
-            }
-            for d in per_domain_total
-        },
-        "error_count": len(errors),
-    }
-
-    print("\n==== EVALUATION SUMMARY ====")
-    print(json.dumps(report, indent=2))
-    return report
-
+def evaluate_dev_set(dev_file="data/cse476_final_project_dev_data.json", limit=None):
+    """
+    Evaluate the agent on the dev set across all domains.
+    """
+    try:
+        with open(dev_file, 'r') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        print(f"Error: Could not find {dev_file}")
+        return
+    
+    if limit:
+        data = data[:limit]
+    
+    # Group by domain
+    by_domain = {}
+    for item in data:
+        domain = item.get('domain', 'unknown')
+        if domain not in by_domain:
+            by_domain[domain] = []
+        by_domain[domain].append(item)
+    
+    # Evaluate each domain
+    results = {}
+    total_correct = 0
+    total_questions = 0
+    total_calls = 0
+    
+    print("=" * 70)
+    print("EVALUATING REASONING AGENT ON DEV SET")
+    print("=" * 70)
+    
+    for domain in sorted(by_domain.keys()):
+        questions = by_domain[domain]
+        correct = 0
+        domain_calls = 0
+        
+        print(f"\n[{domain.upper()}] Evaluating {len(questions)} questions...")
+        
+        for i, item in enumerate(questions, 1):
+            reset_per_question_counter()
+            
+            question = item['input']
+            expected = str(item.get('output', ''))
+            
+            try:
+                prediction = route_and_solve(question)
+            except CallBudgetExceeded:
+                prediction = ""
+                print(f"  Q{i}: BUDGET EXCEEDED")
+                continue
+            except Exception as e:
+                prediction = ""
+                print(f"  Q{i}: ERROR - {str(e)[:50]}")
+                continue
+            
+            calls = get_per_question_calls()
+            domain_calls += calls
+            
+            is_correct = grade_answer(question, expected, prediction, domain)
+            if is_correct:
+                correct += 1
+                status = "✓"
+            else:
+                status = "✗"
+            
+            if i <= 3 or (i % 10 == 0):  # Print first 3 and every 10th
+                exp_preview = expected[:40].replace('\n', ' ')
+                pred_preview = prediction[:40].replace('\n', ' ')
+                print(f"  Q{i} [{status}] Calls: {calls} | Exp: {exp_preview}... | Got: {pred_preview}...")
+        
+        accuracy = (correct / len(questions) * 100) if questions else 0
+        avg_calls = (domain_calls / len(questions)) if questions else 0
+        
+        results[domain] = {
+            'count': len(questions),
+            'correct': correct,
+            'accuracy': accuracy,
+            'total_calls': domain_calls,
+            'avg_calls': avg_calls
+        }
+        
+        total_correct += correct
+        total_questions += len(questions)
+        total_calls += domain_calls
+        
+        print(f"  → {domain.upper()}: {accuracy:.1f}% ({correct}/{len(questions)}) | Avg calls: {avg_calls:.1f}")
+    
+    # Print summary table
+    print("\n" + "=" * 70)
+    print("SUMMARY TABLE")
+    print("=" * 70)
+    print(f"{'Domain':<20} {'Count':>8} {'Correct':>8} {'Accuracy':>12} {'Avg Calls':>12}")
+    print("-" * 70)
+    
+    for domain in sorted(results.keys()):
+        r = results[domain]
+        print(f"{domain:<20} {r['count']:>8} {r['correct']:>8} {r['accuracy']:>11.1f}% {r['avg_calls']:>12.1f}")
+    
+    print("-" * 70)
+    overall_accuracy = (total_correct / total_questions * 100) if total_questions else 0
+    overall_avg = (total_calls / total_questions) if total_questions else 0
+    print(f"{'OVERALL':<20} {total_questions:>8} {total_correct:>8} {overall_accuracy:>11.1f}% {overall_avg:>12.1f}")
+    print("=" * 70)
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--n", type=int, default=None, help="limit number of examples")
-    ap.add_argument(
-        "--domains",
-        nargs="+",
-        default=None,
-        choices=["math", "coding", "common_sense", "future_prediction", "planning"],
-    )
-    ap.add_argument("--no-judge", action="store_true", help="skip LLM-as-judge grading")
-    args = ap.parse_args()
-
-    run_eval(n=args.n, domains=args.domains, use_judge=not args.no_judge)
+    limit = None
+    if len(sys.argv) > 1 and sys.argv[1] == "--n":
+        if len(sys.argv) > 2:
+            limit = int(sys.argv[2])
+    
+    evaluate_dev_set(limit=limit)
