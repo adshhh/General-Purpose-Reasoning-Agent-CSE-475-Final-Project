@@ -1,4 +1,4 @@
-# Owner: Person C (Ismail) - shared agent entry point
+#Ismail - shared agent entry point
 """
 Main agent entry point for CSE 476 Final Project.
 
