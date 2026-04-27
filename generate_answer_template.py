@@ -1,31 +1,46 @@
-"""
-Generate the final answer file for the CSE 476 auto-grader.
-
-Reads cse_476_final_project_test_data.json from ./data, runs each question
-through the agent (agent.run_agent), and writes cse_476_final_project_answers.json.
-
-Usage:
-    python generate_answer_template.py                 # process all ~6200 questions
-    python generate_answer_template.py --n 50          # first 50 only (smoke test)
-    python generate_answer_template.py --resume        # skip questions already answered
-"""
-
 from __future__ import annotations
-
 import argparse
 import json
-import threading
+import os
+import sys
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List
 
 from agent import run_agent
-from utils import get_call_count, reset_call_count
+from utils import (
+    get_call_count,
+    reset_call_count,
+    get_failure_count,
+    PER_QUESTION_CAP,
+)
 
 
 INPUT_PATH = Path("data/cse_476_final_project_test_data.json")
 OUTPUT_PATH = Path("data/cse_476_final_project_answers.json")
+INPUT_PATH_FALLBACK = Path("cse_476_final_project_test_data.json")
+OUTPUT_PATH_FALLBACK = Path("cse_476_final_project_answers.json")
+
+CHECKPOINT_EVERY = 50
+PER_QUESTION_WALLCLOCK = 180  #hard ceiling per question
+
+
+def _resolve_input() -> Path:
+    if INPUT_PATH.exists():
+        return INPUT_PATH
+    if INPUT_PATH_FALLBACK.exists():
+        return INPUT_PATH_FALLBACK
+    raise FileNotFoundError(
+        f"Could not find input file at {INPUT_PATH} or {INPUT_PATH_FALLBACK}"
+    )
+
+
+def _resolve_output() -> Path:
+    if INPUT_PATH.exists():
+        return OUTPUT_PATH
+    return OUTPUT_PATH_FALLBACK
 
 
 def load_questions(path: Path) -> List[Dict[str, Any]]:
@@ -36,189 +51,184 @@ def load_questions(path: Path) -> List[Dict[str, Any]]:
     return data
 
 
-def load_existing_answers(path: Path) -> List[Dict[str, str]]:
-    """Load a partial answers file if it exists (for --resume)."""
+def load_existing_answers(path: Path, expected_len: int) -> List[Dict[str, str]]:
     if not path.exists():
-        return []
+        return [{"output": ""} for _ in range(expected_len)]
     try:
         with path.open("r") as fp:
             data = json.load(fp)
-        if isinstance(data, list):
-            return data
-    except json.JSONDecodeError:
-        pass
-    return []
+        if not isinstance(data, list):
+            return [{"output": ""} for _ in range(expected_len)]
+        out: List[Dict[str, str]] = []
+        for entry in data:
+            if isinstance(entry, dict) and isinstance(entry.get("output"), str):
+                out.append({"output": entry["output"]})
+            else:
+                out.append({"output": ""})
+        while len(out) < expected_len:
+            out.append({"output": ""})
+        return out[:expected_len]
+    except (json.JSONDecodeError, OSError):
+        return [{"output": ""} for _ in range(expected_len)]
 
 
-def _solve_one(idx: int, q: Dict[str, Any], timeout_sec: int) -> Dict[str, str]:
-    """Solve one question with a hard wall-clock timeout. Returns {"output": str}."""
-    result = {"answer": "", "error": None}
-
-    def _run():
-        try:
-            result["answer"] = run_agent(q["input"]) or ""
-        except Exception as e:
-            result["error"] = f"{type(e).__name__}: {e}"
-
-    th = threading.Thread(target=_run, daemon=True)
-    th.start()
-    th.join(timeout=timeout_sec)
-    if th.is_alive():
-        # Solver hung past the per-question budget. Daemon thread will be
-        # left running but garbage-collected with the process.
-        return {"output": ""}
-    if result["error"]:
-        print(f"[{idx + 1}] crashed: {result['error']}", flush=True)
-    return {"output": result["answer"]}
+_write_lock = threading.Lock()
 
 
-def build_answers(
-    questions: List[Dict[str, Any]],
-    existing: List[Dict[str, str]],
-    resume: bool,
-    workers: int,
-    timeout_sec: int,
-) -> List[Dict[str, str]]:
-    answers: List[Dict[str, str]] = list(existing) if resume else []
-    start_idx = len(answers) if resume else 0
-    if resume and start_idx:
-        print(f"Resuming from question {start_idx + 1} (already have {start_idx}).")
-
-    reset_call_count()
-    t0 = time.time()
-    pending = list(range(start_idx, len(questions)))
-
-    if workers <= 1:
-        # Sequential path -- preserves the original behaviour exactly.
-        for idx in pending:
-            ans = _solve_one(idx, questions[idx], timeout_sec)
-            answers.append(ans)
-            _maybe_log(idx, len(questions), start_idx, t0)
-            if (idx + 1) % 10 == 0 or idx == len(questions) - 1:
-                _write(OUTPUT_PATH, answers)
-        return answers
-
-    # Parallel path. Submit the remaining questions to a thread pool, but
-    # stash results in a slot list keyed by absolute index so the final
-    # output file stays in input order.
-    print(f"Running {len(pending)} questions across {workers} workers "
-          f"(per-question timeout {timeout_sec}s).", flush=True)
-
-    slot: Dict[int, Dict[str, str]] = {}
-    write_lock = threading.Lock()
-    completed = 0
-
-    def _worker(idx: int) -> tuple[int, Dict[str, str]]:
-        return idx, _solve_one(idx, questions[idx], timeout_sec)
-
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futs = [pool.submit(_worker, idx) for idx in pending]
-        for fut in as_completed(futs):
-            idx, ans = fut.result()
-            with write_lock:
-                slot[idx] = ans
-                completed += 1
-                # Periodic checkpoint: flush whatever's complete so far.
-                if completed % 10 == 0 or completed == len(pending):
-                    full = list(answers) + [
-                        slot[i] for i in sorted(slot)
-                    ]
-                    _write(OUTPUT_PATH, full)
-                    _maybe_log_completion(completed, len(pending), t0)
-
-    # Stitch the slot dict back into answers in input order.
-    for idx in pending:
-        answers.append(slot.get(idx, {"output": ""}))
-    return answers
+def _write_atomic(path: Path, answers: List[Dict[str, str]]) -> None:
+    # Write to a tmp file and rename so a crash mid-write can't corrupt anything.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w") as fp:
+        json.dump(answers, fp, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
 
 
-def _maybe_log(idx: int, total: int, start_idx: int, t0: float) -> None:
-    if (idx + 1) % 10 == 0 or idx == total - 1:
-        elapsed = time.time() - t0
-        rate = (idx + 1 - start_idx) / max(1, elapsed)
-        calls = get_call_count()
-        print(
-            f"[{idx + 1}/{total}] "
-            f"calls={calls} "
-            f"avg={calls / max(1, idx + 1 - start_idx):.1f}/q "
-            f"rate={rate:.2f} q/s",
-            flush=True,
-        )
+def checkpoint(path: Path, answers: List[Dict[str, str]]) -> None:
+    with _write_lock:
+        _write_atomic(path, answers)
 
 
-def _maybe_log_completion(completed: int, pending_total: int, t0: float) -> None:
-    elapsed = time.time() - t0
-    rate = completed / max(1, elapsed)
-    calls = get_call_count()
-    eta_sec = (pending_total - completed) / max(0.001, rate)
-    print(
-        f"[{completed}/{pending_total} done] "
-        f"calls={calls} "
-        f"avg={calls / max(1, completed):.1f}/q "
-        f"rate={rate:.2f} q/s "
-        f"eta={eta_sec / 60:.1f}min",
-        flush=True,
-    )
-
-
-def validate_results(
-    questions: List[Dict[str, Any]], answers: List[Dict[str, Any]]
-) -> None:
+def validate_results(questions, answers) -> None:
     if len(questions) != len(answers):
         raise ValueError(
             f"Mismatched lengths: {len(questions)} questions vs {len(answers)} answers."
         )
-    for idx, answer in enumerate(answers):
-        if "output" not in answer:
+    for idx, ans in enumerate(answers):
+        if "output" not in ans:
             raise ValueError(f"Missing 'output' field for answer index {idx}.")
-        if not isinstance(answer["output"], str):
+        if not isinstance(ans["output"], str):
             raise TypeError(
-                f"Answer at index {idx} has non-string output: {type(answer['output'])}"
+                f"Answer at index {idx} has non-string output: {type(ans['output'])}"
             )
-        if len(answer["output"]) >= 5000:
+        if len(ans["output"]) >= 5000:
             raise ValueError(
                 f"Answer at index {idx} exceeds 5000 characters "
-                f"({len(answer['output'])} chars)."
+                f"({len(ans['output'])} chars)."
             )
 
 
-def _write(path: Path, answers: List[Dict[str, str]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w") as fp:
-        json.dump(answers, fp, ensure_ascii=False, indent=2)
+def _solve_one(idx: int, question: str) -> Dict[str, Any]:
+    t0 = time.time()
+    try:
+        answer = run_agent(question)
+    except Exception as e:
+        return {
+            "idx": idx,
+            "output": "",
+            "elapsed": time.time() - t0,
+            "error": f"{type(e).__name__}: {e}",
+        }
+    return {
+        "idx": idx,
+        "output": answer,
+        "elapsed": time.time() - t0,
+        "error": None,
+    }
+
+
+def run(questions, answers, output_path, workers, resume):
+    total = len(questions)
+    if resume:
+        todo = [i for i, a in enumerate(answers) if not a["output"].strip()]
+    else:
+        todo = list(range(total))
+
+    print(f"Total questions: {total}")
+    print(f"To process this run: {len(todo)} (skipping {total - len(todo)} already-answered)")
+    print(f"Workers: {workers}")
+    print(f"Output: {output_path}")
+    print(f"Per-question call cap: {PER_QUESTION_CAP}")
+    print("-" * 60, flush=True)
+
+    if not todo:
+        print("Nothing to do. Output is already complete.")
+        return
+
+    reset_call_count()
+    t_start = time.time()
+    completed = 0
+    errors = 0
+    last_checkpoint = 0
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_solve_one, i, questions[i]["input"]): i for i in todo}
+        for fut in as_completed(futures):
+            idx = futures[fut]
+            try:
+                result = fut.result(timeout=PER_QUESTION_WALLCLOCK)
+            except Exception as e:
+                result = {
+                    "idx": idx, "output": "",
+                    "elapsed": -1, "error": f"future failed: {e}",
+                }
+
+            answers[result["idx"]] = {"output": result["output"]}
+            completed += 1
+            if result["error"]:
+                errors += 1
+
+            if completed - last_checkpoint >= CHECKPOINT_EVERY:
+                checkpoint(output_path, answers)
+                last_checkpoint = completed
+
+            if completed % 10 == 0 or completed == len(todo):
+                elapsed = time.time() - t_start
+                rate = completed / max(elapsed, 0.001)
+                remaining = len(todo) - completed
+                eta_min = remaining / max(rate, 0.001) / 60
+                total_calls = get_call_count()
+                avg_calls = total_calls / max(completed, 1)
+                fail_calls = get_failure_count()
+                print(
+                    f"[{completed}/{len(todo)}] "
+                    f"rate={rate:.2f} q/s  "
+                    f"avg_calls={avg_calls:.1f}  "
+                    f"failed_calls={fail_calls}  "
+                    f"errors={errors}  "
+                    f"elapsed={elapsed/60:.1f}m  "
+                    f"ETA={eta_min:.1f}m",
+                    flush=True,
+                )
+
+    checkpoint(output_path, answers)
+    elapsed = time.time() - t_start
+    print("-" * 60)
+    print(f"Done. {completed} processed, {errors} errors, {elapsed/60:.1f} minutes total.")
+    print(f"Total LLM calls: {get_call_count()}, failed: {get_failure_count()}")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--n", type=int, default=None, help="limit number of questions")
-    ap.add_argument("--resume", action="store_true", help="skip questions already answered")
-    ap.add_argument("--workers", type=int, default=1,
-                    help="Questions to solve concurrently (default 1 = sequential, original "
-                         "behaviour). For the full 6,200-question run use 3-5.")
-    ap.add_argument("--timeout", type=int, default=90,
-                    help="Per-question wall-clock timeout in seconds. Hung solvers return ''.")
+    ap.add_argument("--n", type=int, default=None, help="Limit to first N questions.")
+    ap.add_argument("--resume", action="store_true",
+                    help="Skip questions that already have non-empty answers.")
+    ap.add_argument("--workers", type=int, default=8, help="Concurrent workers.")
     args = ap.parse_args()
 
-    questions = load_questions(INPUT_PATH)
+    input_path = _resolve_input()
+    output_path = _resolve_output()
+
+    questions = load_questions(input_path)
     if args.n:
         questions = questions[: args.n]
+    expected_len = len(questions)
 
-    existing = load_existing_answers(OUTPUT_PATH) if args.resume else []
-    answers = build_answers(
-        questions, existing,
-        resume=args.resume,
-        workers=args.workers,
-        timeout_sec=args.timeout,
-    )
+    answers = load_existing_answers(output_path, expected_len)
 
-    _write(OUTPUT_PATH, answers)
-    with OUTPUT_PATH.open("r") as fp:
+    try:
+        run(questions, answers, output_path, workers=args.workers, resume=args.resume)
+    except KeyboardInterrupt:
+        print("\nInterrupted. Saving partial progress...", flush=True)
+        checkpoint(output_path, answers)
+        sys.exit(130)
+
+    checkpoint(output_path, answers)
+    with output_path.open("r") as fp:
         saved = json.load(fp)
     validate_results(questions, saved)
-    print(
-        f"\nWrote {len(answers)} answers to {OUTPUT_PATH}. "
-        f"Total LLM calls: {get_call_count()}."
-    )
+    filled = sum(1 for a in saved if a["output"].strip())
+    print(f"\nWrote {len(saved)} answers to {output_path} ({filled} non-empty).")
 
 
 if __name__ == "__main__":
