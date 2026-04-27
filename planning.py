@@ -1,196 +1,136 @@
-# Ismail - planning domain solver
-"""
-Planning domain solver for CSE 476 Final Project.
-
-Handles PDDL-style planning questions (Blocksworld, Logistics, Mystery, etc.)
-where the expected output is a sequence of action lines like:
-    (feast b d)
-    (succumb b)
-    (attack a)
-
-Implements three inference-time techniques. Router calls `solve()`.
-
-  1. plan_and_solve()    -- 2 LLM calls  (cheap, usually good enough)
-  2. least_to_most()     -- 2 LLM calls  (decompose into sub-goals, solve)
-  3. tree_of_thoughts()  -- 6 LLM calls  (diversity + self-scoring, best quality)
-
-Total per-question budget stays <= 6 calls, well under the project's 20-call
-limit. Default strategy is least_to_most (best quality/cost ratio on dev).
-"""
-
-from __future__ import annotations
-
 import re
-from typing import List
-
 from utils import call_llm
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-# Matches parenthesized actions in any case, e.g. "(feast b d)", "(Attack A)"
-# "(drive truck2 depot2 depot0)".
-_ACTION_RE = re.compile(r"\(\s*[a-zA-Z][a-zA-Z0-9_\- ]*\)")
+#matches lines 
+_ACTION_RE = re.compile(r"^\([a-z][a-z0-9_\-]*(?:\s+[a-z0-9_\-]+)*\)$")
 
 
-def _extract_plan(text: str) -> str:
-    """
-    Extract action lines from raw LLM output.
-    Strategy:
-      1. Pull all parenthesized tokens -- lowercased so output is consistent.
-      2. If nothing found, return the raw text stripped of markdown fences
-         (the model may have answered without parens, e.g. 'attack a').
-    """
+def _extract_actions(text):
     if not text:
-        return ""
-    actions: List[str] = []
-    for match in _ACTION_RE.findall(text):
-        action = re.sub(r"\s+", " ", match.strip()).lower()
-        actions.append(action)
+        return []
+    actions = []
+    for raw in text.split("\n"):
+        line = raw.strip().lower()
+        if not line:
+            continue
+        # Strip leading numbering/bullets.
+        line = re.sub(r"^[\d]+[\.\)]\s*", "", line)
+        line = re.sub(r"^[\-\*]\s*", "", line)
+        line = line.strip("` ")
+        if _ACTION_RE.match(line):
+            actions.append(line)
+    return actions
+
+
+_PDDL_FORMAT_RULES = """You are a PDDL formatter. Output ONLY valid PDDL actions.
+
+RULES:
+1. One action per line.
+2. Format: (action-name arg1 arg2 arg3)
+3. All lowercase. Use hyphens for multi-word actions.
+4. Arguments are object names (lowercase).
+5. No explanations, no commentary, no blank lines, no markdown fences.
+
+VALID EXAMPLES:
+(feast b d)
+(succumb b)
+(lift hoist2 crate2 crate1 depot2)
+(load hoist2 crate2 truck2 depot2)
+(unstack yellow red)
+(put-down yellow)
+(pick-up yellow)
+
+Start your output immediately with the first action."""
+
+
+# Technique 9: Plan-and-Solve (2 calls)
+def plan_and_solve(question):
+    plan_sys = (
+        "You are a planning expert. Read the problem carefully and write a "
+        "clear, step-by-step plan that respects all the action preconditions "
+        "stated in the problem. Be explicit about which arguments each action takes."
+    )
+    plan = call_llm(question, system=plan_sys, max_tokens=800)
+
+    prompt = f"Problem:\n{question}\n\nPlan:\n{plan}\n\nNow output the PDDL actions."
+    pddl = call_llm(prompt, system=_PDDL_FORMAT_RULES, max_tokens=800)
+    return pddl
+
+
+# Technique 10: Least-to-Most Decomposition (2 calls)
+def least_to_most(question):
+    decomp_sys = (
+        "Break this planning problem into the simplest possible sub-problems. "
+        "Number them 1, 2, 3, ... in order from easiest to hardest. For each "
+        "sub-problem, state which goal predicate it achieves."
+    )
+    subproblems = call_llm(question, system=decomp_sys, max_tokens=800)
+
+    prompt = (f"Problem:\n{question}\n\nSub-problems:\n{subproblems}\n\n"
+              f"Solve each sub-problem in order and output the combined PDDL action sequence.")
+    pddl = call_llm(prompt, system=_PDDL_FORMAT_RULES, max_tokens=800)
+    return pddl
+
+
+def _split_approaches(text):
+    if not text:
+        return ["", "", ""]
+    parts = re.split(r"(?i)\bapproach\s*\d+\s*[:.\-]?", text)
+    parts = [p.strip() for p in parts if p.strip()]
+    while len(parts) < 3:
+        parts.append("")
+    return parts[:3]
+
+
+# Technique 11: Tree of Thoughts (6 calls)
+def tree_of_thoughts(question):
+    gen_sys = (
+        "Generate exactly 3 distinct, detailed approaches to solve this "
+        "planning problem. Label them clearly as 'Approach 1:', 'Approach 2:', "
+        "and 'Approach 3:'. Each approach should be a different strategy."
+    )
+    approaches = call_llm(question, system=gen_sys, max_tokens=900)
+
+    a1, a2, a3 = _split_approaches(approaches)
+
+    eval_sys = (
+        "Briefly analyze this approach. List its strengths, weaknesses, and "
+        "whether it will produce a valid plan that respects the problem's "
+        "preconditions. Be concise (3-5 sentences)."
+    )
+    e1 = call_llm(f"Problem:\n{question}\n\nApproach:\n{a1}", system=eval_sys, max_tokens=300)
+    e2 = call_llm(f"Problem:\n{question}\n\nApproach:\n{a2}", system=eval_sys, max_tokens=300)
+    e3 = call_llm(f"Problem:\n{question}\n\nApproach:\n{a3}", system=eval_sys, max_tokens=300)
+
+    select_sys = (
+        "Read the three evaluations and decide which approach is best. "
+        "Reply with ONLY a single digit: 1, 2, or 3."
+    )
+    summary = f"Evaluation 1:\n{e1}\n\nEvaluation 2:\n{e2}\n\nEvaluation 3:\n{e3}"
+    pick = call_llm(f"Problem:\n{question}\n\n{summary}", system=select_sys, max_tokens=10).strip()
+
+    chosen = a1
+    if pick.startswith("2"):
+        chosen = a2
+    elif pick.startswith("3"):
+        chosen = a3
+
+    prompt = (f"Problem:\n{question}\n\nSelected approach:\n{chosen}\n\n"
+              f"Now output the PDDL actions for this approach.")
+    pddl = call_llm(prompt, system=_PDDL_FORMAT_RULES, max_tokens=800)
+    return pddl
+
+
+def solve(question, technique="plan_and_solve"):
+    if technique == "least_to_most":
+        result = least_to_most(question)
+    elif technique == "tot":
+        result = tree_of_thoughts(question)
+    else:
+        result = plan_and_solve(question)
+
+    actions = _extract_actions(result)
     if actions:
         return "\n".join(actions)
-    # Fallback: strip markdown fences and return raw text
-    cleaned = re.sub(r"```[a-z]*", "", text).strip()
-    return cleaned
-
-
-def _score_plan(problem: str, plan: str) -> float:
-    """Ask the LLM to rate a candidate plan 0-10. One cheap call."""
-    system = (
-        "You are a strict planning validator. Given a planning problem and a "
-        "candidate plan, rate how likely the plan is to reach the goal while "
-        "respecting every precondition. Reply with ONLY a single integer 0-10."
-    )
-    prompt = (
-        f"PROBLEM:\n{problem[:3000]}\n\n"
-        f"CANDIDATE PLAN:\n{plan}\n\n"
-        "Score (0-10):"
-    )
-    reply = call_llm(prompt, system=system, temperature=0.0, max_tokens=10)
-    m = re.search(r"\d+", reply or "")
-    if not m:
-        return 0.0
-    return min(10.0, max(0.0, float(m.group(0))))
-
-
-# ---------------------------------------------------------------------------
-# Technique 1: Plan-and-Solve
-# ---------------------------------------------------------------------------
-
-def plan_and_solve(problem: str) -> str:
-    """First produce a natural-language outline, then emit action syntax."""
-    outline_system = (
-        "You are a careful planner. Read the planning problem. First restate "
-        "the initial state and goal in one sentence each. Then list the "
-        "high-level steps needed to reach the goal. Do not emit action syntax "
-        "yet. Keep it under 12 steps."
-    )
-    outline = call_llm(problem, system=outline_system, temperature=0.0, max_tokens=600)
-
-    emit_system = (
-        "Convert a plan outline into a sequence of actions using the EXACT "
-        "syntax shown in the problem statement (one action per line, e.g. "
-        "'(attack a)' or '(drive truck1 depot0 depot1)'). Output ONLY the "
-        "action lines, no commentary, no markdown fences."
-    )
-    emit_prompt = (
-        f"PROBLEM:\n{problem}\n\n"
-        f"PLAN OUTLINE:\n{outline}\n\n"
-        "Now emit the final action sequence:"
-    )
-    actions = call_llm(emit_prompt, system=emit_system, temperature=0.0, max_tokens=800)
-    return _extract_plan(actions)
-
-
-# ---------------------------------------------------------------------------
-# Technique 2: Least-to-Most
-# ---------------------------------------------------------------------------
-
-def least_to_most(problem: str) -> str:
-    """Decompose goal into ordered sub-goals, then solve them in one shot."""
-    decompose_system = (
-        "Given a planning problem, break the final goal into an ordered list "
-        "of smaller sub-goals. Each sub-goal should name a concrete predicate "
-        "from the goal description. Output one sub-goal per line, numbered."
-    )
-    subgoals = call_llm(
-        problem, system=decompose_system, temperature=0.0, max_tokens=400
-    )
-
-    solve_system = (
-        "You are a planner. Achieve the listed sub-goals in order, using only "
-        "the actions defined in the problem. Respect every precondition. "
-        "Output ONLY action lines in the EXACT syntax from the problem "
-        "(e.g. '(feast b d)'), one per line, no commentary."
-    )
-    solve_prompt = (
-        f"PROBLEM:\n{problem}\n\n"
-        f"ORDERED SUB-GOALS:\n{subgoals}\n\n"
-        "Full action sequence to achieve all sub-goals in order:"
-    )
-    actions = call_llm(solve_prompt, system=solve_system, temperature=0.0, max_tokens=800)
-    return _extract_plan(actions)
-
-
-# ---------------------------------------------------------------------------
-# Technique 3: Tree of Thoughts
-# ---------------------------------------------------------------------------
-
-def tree_of_thoughts(problem: str, n_candidates: int = 3) -> str:
-    """Sample diverse plans, score each, return the best. 2 * n_candidates calls."""
-    gen_system = (
-        "You are a creative planner. Produce a full plan for the given "
-        "problem. Output ONLY the action lines in the EXACT syntax used in "
-        "the problem statement, one per line, no commentary."
-    )
-
-    candidates: List[str] = []
-    for i in range(n_candidates):
-        temp = 0.3 + 0.3 * i  # 0.3, 0.6, 0.9 -- increasing diversity
-        raw = call_llm(problem, system=gen_system, temperature=temp, max_tokens=800)
-        plan = _extract_plan(raw)
-        if plan:
-            candidates.append(plan)
-
-    if not candidates:
-        return ""
-
-    best_plan = candidates[0]
-    best_score = -1.0
-    for plan in candidates:
-        score = _score_plan(problem, plan)
-        if score > best_score:
-            best_score = score
-            best_plan = plan
-    return best_plan
-
-
-# ---------------------------------------------------------------------------
-# Main entry point (called by router.py)
-# ---------------------------------------------------------------------------
-
-def solve(question: str, strategy: str = "least_to_most", debug: bool = False) -> str:
-    """
-    Route to one of the three techniques.
-    strategy: "plan_and_solve" | "least_to_most" (default) | "tree_of_thoughts"
-    debug: print raw API response to diagnose empty results
-    """
-    if debug:
-        raw = call_llm(
-            question,
-            system="You are a planner. Output ONLY action lines in parenthesis syntax e.g. (attack a), one per line.",
-            temperature=0.0,
-            max_tokens=800,
-        )
-        print("[DEBUG] Raw API response:")
-        print(raw)
-        print("[DEBUG] Extracted:")
-        print(_extract_plan(raw))
-        return _extract_plan(raw)
-    if strategy == "plan_and_solve":
-        return plan_and_solve(question)
-    if strategy == "tree_of_thoughts":
-        return tree_of_thoughts(question, n_candidates=3)
-    return least_to_most(question)
+    return (result or "").strip()
