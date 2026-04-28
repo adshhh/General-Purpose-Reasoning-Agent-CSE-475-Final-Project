@@ -7,7 +7,7 @@ import re
 from collections import Counter
 from typing import List, Optional
 
-from utils import call_llm, get_per_question_calls, MAX_CALLS_PER_QUESTION
+from utils import call_llm, get_per_question_calls, PER_QUESTION_CAP
 from parallel import call_llm_concurrent, call_llm_batch
 
 
