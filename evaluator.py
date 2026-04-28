@@ -33,6 +33,24 @@ def normalize(text):
     return text
 
 
+def extract_boxed(text):       #  Strip the boxed{...} wrapper and return the inner text.
+    matches = re.findall(r"\\boxed\{((?:[^{}]|\{[^{}]*\})*)\}", text or "")
+    return matches[-1].strip() if matches else (text or "").strip()
+
+
+def fp_expected_choices(expected): #Parse future_prediction expected stored as a stringified list
+    import ast
+    s = (expected or "").strip()
+    if s.startswith("[") and s.endswith("]"):
+        try:
+            parsed = ast.literal_eval(s)
+            if isinstance(parsed, (list, tuple)):
+                return [str(x).strip() for x in parsed]
+        except (ValueError, SyntaxError):
+            pass
+    return [s]
+
+
 def grade(expected, prediction, domain):
     e, p = normalize(expected), normalize(prediction)
     if not p:
@@ -40,21 +58,43 @@ def grade(expected, prediction, domain):
     if e == p:
         return True
 
-    if domain == "math":
-        # Compare first numeric token.
+    if domain == "math":        # Float comparison.
         en = re.findall(r"-?\d+\.?\d*", e)
         pn = re.findall(r"-?\d+\.?\d*", p)
-        if en and pn and en[0] == pn[0]:
-            return True
+        if en and pn:
+            try:
+                if abs(float(en[0]) - float(pn[0])) < 1e-6:
+                    return True
+            except ValueError:
+                pass
 
-    if domain == "coding":
-        fn = re.search(r"def\s+(\w+)", e)
-        if fn and fn.group(1) in p:
+    if domain == "coding":      # Expected is the function body, check it appears in prediction.
+        if e and e in p:
             return True
 
     if domain == "common_sense":
         if e and (e in p or p in e):
             return True
+
+    if domain == "future_prediction":       # Prediction is \\boxed{answer}, expected is a stringified list e.g. "['No']".
+        inner = normalize(extract_boxed(prediction))
+        choices = fp_expected_choices(expected)
+        inner_nums = re.findall(r"-?\d+\.?\d*", inner)
+        for choice in choices:
+            c = normalize(choice)
+            if not c:
+                continue
+            if c == inner:
+                return True
+            c_nums = re.findall(r"-?\d+\.?\d*", c)
+            if c_nums and inner_nums:
+                try:
+                    if abs(float(c_nums[0]) - float(inner_nums[0])) < 1e-3:
+                        return True
+                except ValueError:
+                    pass
+            if len(c) >= 2 and (c in inner or inner in c):
+                return True
 
     return False
 

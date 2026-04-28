@@ -2,8 +2,10 @@ import re
 from utils import call_llm
 
 
-#matches lines 
+# Strict: the whole line must be a valid PDDL action (lowercase).
 _ACTION_RE = re.compile(r"^\([a-z][a-z0-9_\-]*(?:\s+[a-z0-9_\-]+)*\)$")
+# Fallback: find any parenthesized token anywhere in a line.
+_ACTION_ANYWHERE_RE = re.compile(r"\([a-z][a-z0-9_\-]*(?:\s+[a-z0-9_\-]+)*\)")
 
 
 def _extract_actions(text):
@@ -20,6 +22,11 @@ def _extract_actions(text):
         line = line.strip("` ")
         if _ACTION_RE.match(line):
             actions.append(line)
+
+    # Fallback: if strict per-line extraction found nothing, search anywhere
+    # in the full text. Handles prose like "Step 1: (pick-up a)".
+    if not actions:
+        actions = _ACTION_ANYWHERE_RE.findall(text.lower())
     return actions
 
 

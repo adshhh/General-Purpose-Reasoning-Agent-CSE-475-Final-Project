@@ -13,25 +13,44 @@ API_KEY = os.getenv("OPENAI_API_KEY", "your_key_here")
 API_BASE = os.getenv("API_BASE", "https://openai.rc.asu.edu/v1")
 MODEL = os.getenv("MODEL_NAME", "qwen3-30b-a3b-instruct-2507")
 
-#allows 20 calls/question, cap at 18 for safety.
-PER_QUESTION_CAP = 18
+#allows 20 calls/question.
+PER_QUESTION_CAP = 20
 REQUEST_TIMEOUT = 45
 MAX_RETRIES = 3
 DEFAULT_MAX_TOKENS = 512
 
-#question counter is thread-local so concurrent workers don't trample each other.
-_local = threading.local()
 _global_lock = threading.Lock()
 _global_count = 0
 _global_failures = 0
 
+# Cell system: each question gets a mutable _Counter shared between the question
+# thread and any parallel worker threads spawned by parallel.py (call_llm_batch /
+# call_llm_concurrent). Workers bind the parent's cell before running so all
+# call_llm increments land on the same per-question budget counter.
+_cell_local = threading.local()
+
+
+class _Counter:
+    __slots__ = ("count",)
+    def __init__(self):
+        self.count = 0
+
+
+def get_current_cell():
+    return getattr(_cell_local, "cell", None)
+
+
+def set_current_cell(cell):
+    _cell_local.cell = cell
+
 
 def reset_per_question_counter():
-    _local.count = 0
+    _cell_local.cell = _Counter()
 
 
 def get_per_question_calls():
-    return getattr(_local, "count", 0)
+    cell = get_current_cell()
+    return cell.count if cell is not None else 0
 
 
 def get_call_count():
@@ -51,7 +70,9 @@ def get_failure_count():
 
 def _bump_counters():
     global _global_count
-    _local.count = getattr(_local, "count", 0) + 1
+    cell = get_current_cell()
+    if cell is not None:
+        cell.count += 1
     with _global_lock:
         _global_count += 1
 
@@ -64,7 +85,7 @@ def _bump_failures():
 
 def call_llm(prompt, system="You are a helpful assistant.", temperature=0.0,
              max_tokens=DEFAULT_MAX_TOKENS):
-    cur = getattr(_local, "count", 0)
+    cur = get_per_question_calls()
     if cur >= PER_QUESTION_CAP:
         raise CallBudgetExceeded(f"Per-question call cap reached ({PER_QUESTION_CAP}).")
 
