@@ -132,7 +132,6 @@ result = denny_hotwheels_cars
 
 ANS_RE = re.compile(r"^Final Answer:\s*(.*)$", re.IGNORECASE | re.MULTILINE)
 
-# Cleanly get final answer value
 def extract_answer(output: str) -> str:
     
     m = ANS_RE.search(output.strip())
@@ -140,7 +139,6 @@ def extract_answer(output: str) -> str:
     
     return final_answer
 
-# Normalize the value, Helper function for majority_vote().
 def normalize_answer(ans: str) -> str:
     
     norm_ans = ans.strip().replace(",", "")
@@ -151,7 +149,6 @@ def normalize_answer(ans: str) -> str:
     except (ValueError, OverflowError):
         return norm_ans
 
-# Calculate votes for each final answers and return the winner.
 def majority_vote(answers: List[str]) -> str:
     
     if not answers:
@@ -190,9 +187,11 @@ def pal_from_cot(question: str, cot_reasoning: str, temperature: float = 0.0) ->
 def run_code(code: str):
     namespace = {"__builtins__": __builtins__}
     exec("import math", namespace)
+    
     try:
         exec(code, namespace)
         return namespace.get("result", None)
+    
     except Exception as e:
         print(f"[run_code failed] {e}\nCode: {code[:200]}")
         return None
@@ -201,9 +200,11 @@ def solve(question: str) -> str:
     plan = cot_pal_solve(question)
     pal_code = pal_from_cot(question, plan)
     result = run_code(pal_code)
+    
     if result is not None:
         try:
             return str(int(result))
+        
         except (TypeError, ValueError):
             return str(result)
 
