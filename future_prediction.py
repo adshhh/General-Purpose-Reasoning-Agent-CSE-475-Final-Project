@@ -193,13 +193,10 @@ def _looks_mcq(inners: List[str]) -> bool:
 
 def _ensemble_pick(candidates: List[str]) -> str:
     """
-    Combine multiple \\boxed{...} candidate answers into one final \\boxed{...}.
-
-    Order of attempts:
-      1. MCQ path: if all candidates are A-E option sets, vote on the most-
-         common single letter (handles draft-level "C, D" hedging).
-      2. Numeric path: if a clear majority parse as numbers, return median.
-      3. Text path: majority vote on the normalised inner text.
+    Pick the best answer from multiple candidates. Tries in order:
+      1. If all answers are multiple choice letters, pick the most common one
+      2. If most answers are numbers, take the median
+      3. Otherwise just majority-vote on the text
     """
     inners = [_inner(c) for c in candidates if c]
     inners = [s for s in inners if s]
@@ -249,11 +246,11 @@ def _ensemble_pick(candidates: List[str]) -> str:
 
 def plan_solve_refine_with_ensemble(question: str) -> str:
     """
-    Full 8-call pipeline:
-      4-call PaS+SR  ->  refined answer (candidate #1)
-      4-call quick drafts at T=0.5  ->  candidates #2-#5
-      offline ensemble vote across all 5
-    Each stage checks the budget and degrades gracefully under pressure.
+    Full pipeline, up to 8 calls:
+      plan + solve + critique + refine -> main answer
+      4 quick drafts at higher temp -> extra candidates
+      then vote across all 5
+    Skips steps if we're running low on calls.
     """
     candidates: List[str] = []
 

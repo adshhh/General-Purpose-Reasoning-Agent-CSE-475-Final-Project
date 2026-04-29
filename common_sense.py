@@ -148,12 +148,10 @@ def _budget_left() -> int:
 
 def _beta_dominance_posterior(majority: int, runner_up: int, samples: int = 5000) -> float:
     """
-    Approximate P(theta_majority > theta_runner_up) using independent Beta(1,1)
-    priors. We sample from each beta and count how often majority > runner_up.
-    Cheap and dependency-free (only uses random, which is in stdlib).
-
-    Returns a value in [0, 1]. Higher = more confident the majority answer
-    really is the dominant one given the votes seen so far.
+    Check how confident we are that the top-voted answer is actually the right one.
+    Samples from beta distributions and sees how often the leader beats the runner-up.
+    Only uses stdlib random so no extra dependencies.
+    Returns 0-1, higher = more confident.
     """
     # Beta(majority+1, ...) -- see Aggarwal et al. 2023 for the derivation.
     import random
@@ -187,12 +185,10 @@ def _step_back_b(abstract_q: str) -> str:
 
 def _step_back_and_recite_parallel(question: str) -> tuple[str, str]:
     """
-    Speed optimisation: step-back A and recite are INDEPENDENT (recite only
-    needs the question). Fire them in parallel, then chain step-back B onto
-    A's output.
-
-    Returns (stepback_ctx, recite_ctx). Either may be "" on failure /
-    budget exhaustion.
+    Run step-back A and recite at the same time since they don't depend on
+    each other. Then do step-back B which needs A's result.
+    Returns (stepback_ctx, recite_ctx), either can be "" if something fails
+    or we run out of calls.
     """
     # Phase 1: step-back A and recite in parallel.
     if _budget_left() < 2:
@@ -259,9 +255,9 @@ def _adaptive_self_consistency(
     recite_ctx: str,
 ) -> List[str]:
     """
-    Sample in parallel batches of ASC_BATCH_SIZE. After each batch, fit the
-    Beta-posterior on the top-2 votes and stop early when posterior >= 0.95.
-    Returns the list of extracted short answers across all samples.
+    Run multiple samples in batches and vote. After each batch, check if
+    one answer is clearly winning (>= 0.95 confidence) and stop early if so.
+    Returns all the short answers we collected.
     """
     prompt = _build_sample_prompt(question, stepback_ctx, recite_ctx)
     short_answers: List[str] = []
@@ -379,9 +375,9 @@ def _usc_select(question: str, candidates: List[str]) -> str:
 
 def step_back_recite_adaptive_sc(question: str) -> str:
     """
-    Full Round 2 pipeline. ~10 calls average, hard-capped at 19 internally
-    (1 below utils.py's 20, leaving headroom for any retry storm).
-    Step-back A and recite fire in parallel; step-back B then chains on A.
+    Main pipeline. Usually ~10 calls, capped at 19 so we don't blow past
+    the 20-call limit in utils.py. Step-back A and recite run in parallel,
+    then step-back B runs after A finishes.
     """
     stepback_ctx, recite_ctx = _step_back_and_recite_parallel(question)
     samples = _adaptive_self_consistency(question, stepback_ctx, recite_ctx)
